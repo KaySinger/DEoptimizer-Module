@@ -149,7 +149,7 @@ class SHADE:
                     self.CR_memory[self.hist_idx] = CR_mean
                     self.hist_idx = (self.hist_idx + 1) % self.H
 
-            print(f"Iteration {gen + 1}, Best: {np.min(self.fitness):.6f}")
+            print(f"Iteration {gen + 1}, Best fitness: {np.min(self.fitness)}")
 
         # 返回最优解
         best_idx = np.argmin(self.fitness)

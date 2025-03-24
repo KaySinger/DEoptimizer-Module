@@ -121,7 +121,7 @@ class JADE:
             if CR_values:
                 self.CR_mean = (1 - 0.1) * self.CR_mean + 0.1 * np.mean(CR_values)
 
-            print(f"Iteration {gen + 1}, Best fitness: {np.min(self.fitness):.6f}")
+            print(f"Iteration {gen + 1}, Best fitness: {np.min(self.fitness)}")
 
         # 返回最优解
         best_idx = np.argmin(self.fitness)
