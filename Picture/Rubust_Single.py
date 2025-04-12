@@ -3,10 +3,12 @@ import numpy as np
 from scipy.integrate import odeint
 import matplotlib.pyplot as plt
 
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 中文显示
+plt.rcParams['axes.unicode_minus'] = False
+
 # 创建保存图像的文件夹
 save_dir = r'C:\Users\13119\Desktop\敏感性测试图'
 os.makedirs(save_dir, exist_ok=True)
-
 
 # 定义核心函数
 def equations(p, t, k_values):
@@ -20,69 +22,159 @@ def equations(p, t, k_values):
     dpdt[40] = k[39] * (p[39] ** 2) - k_inv[38] * p[40]
     return dpdt
 
+def get_perturbation_settings():
+    """获取用户自定义的扰动设置"""
+    settings = []
+    while True:
+        print("\n请选择扰动类型（输入q结束设置）：")
+        print("1. 正向扰动（+%）")
+        print("2. 负向扰动（-%）")
+        choice = input("请输入选择（1/2/q）：").strip().lower()
+
+        if choice == 'q':
+            break
+
+        if choice not in ['1', '2']:
+            print("输入无效，请重新选择")
+            continue
+
+        try:
+            percentage = float(input(f"请输入扰动幅度（{'正' if choice == '1' else '负'}向百分比，如30表示30%）："))
+            if percentage <= 0:
+                print("幅度必须为正数")
+                continue
+
+            if choice == '1':
+                settings.append(('+', 1 + percentage / 100))
+            else:
+                settings.append(('-', 1 - percentage / 100))
+
+            print(f"已添加 {'+' if choice == '1' else '-'}{percentage}% 扰动")
+
+        except ValueError:
+            print("请输入有效数字")
+
+    return settings if settings else [('+', 1.3), ('-', 0.7)]  # 默认±30%
+
 
 # 扰动测试主函数
 def single_perturb_test(initial_k, base_sol):
-    sensitivity_matrix = np.zeros((40, 40))  # 存储敏感性数据（40个k x 40个P）
-    max_changes = []  # 记录每个k扰动导致的最大浓度变化
+    # 获取用户自定义扰动设置
+    perturb_settings = get_perturbation_settings()
+
+    sensitivity_matrix = np.zeros((40, 40))  # 存储敏感性数据
+    all_changes = []  # 存储所有扰动数据
 
     for k_idx in range(40):  # 遍历k0-k39
-        for perturb_dir in [0.7, 1.3]:  # ±30%扰动
-            # 复制原始系数并施加扰动
+        for direction, factor in perturb_settings:  # 使用用户定义的扰动
+            # 复制并扰动系数
             perturbed_k = initial_k.copy()
-            perturbed_k[k_idx] *= perturb_dir
+            perturbed_k[k_idx] *= factor
 
             # 求解ODE
             sol = odeint(equations, initial_p, t, args=(perturbed_k,))
-            final_conc = sol[-1, 1:]  # 取P1-P40的最终浓度
+            final_conc = sol[-1, 1:]  # P1-P40
 
-            # 计算浓度变化量（绝对值百分比变化）
+            # 计算变化百分比（保留符号）
             delta = (final_conc - base_sol[-1, 1:]) / base_sol[-1, 1:] * 100
-            delta = np.abs(delta)
 
-            # 更新敏感性矩阵（取最大值）
-            sensitivity_matrix[k_idx] = np.maximum(sensitivity_matrix[k_idx], delta)
+            # 存储结果（格式：k_idx, 方向, 因子, delta）
+            all_changes.append((k_idx, direction, factor, delta))
 
-            # 保存对比图
+            # 更新热图矩阵（绝对值）
+            sensitivity_matrix[k_idx] = np.maximum(sensitivity_matrix[k_idx], np.abs(delta))
+
+            # 生成对比曲线图
             plt.figure(figsize=(10, 6))
-            plt.bar(range(1, 41), base_sol[-1, 1:], width=0.4, label='Original')
-            plt.bar(np.arange(1, 41) + 0.4, final_conc, width=0.4, label=f'k{k_idx} {perturb_dir}x')
-            plt.xlabel('Polymer Size')
-            plt.ylabel('Concentration')
-            plt.title(f'k{k_idx} Perturbation {perturb_dir}x Effect')
-            plt.legend()
-            plt.savefig(os.path.join(save_dir, f'k{k_idx}_perturb_{perturb_dir}.png'))
+            plt.plot(range(1, 41), base_sol[-1, 1:], 'b-o',
+                     linewidth=1.5, markersize=4,
+                     markeredgecolor='b', markerfacecolor='none',
+                     label='Original')
+
+            # 根据扰动方向选择颜色
+            line_color = 'g' if direction == '+' else 'r'
+            plt.plot(range(1, 41), final_conc, f'{line_color}--s',
+                     linewidth=1.5, markersize=4,
+                     markeredgecolor=line_color, markerfacecolor='none',
+                     label=f'k{k_idx} {direction}{abs((factor - 1) * 100):.0f}%')
+
+            plt.xlabel('Polymer Size', fontsize=12)
+            plt.ylabel('Concentration', fontsize=12)
+            title_direction = "正向" if direction == "+" else "负向"
+            plt.title(f'k{k_idx} {title_direction}{abs((factor - 1) * 100):.0f}%扰动效果', fontsize=14)
+            plt.legend(fontsize=10)
+            plt.grid(True, linestyle='--', alpha=0.6)
+            plt.xticks(fontsize=10)
+            plt.yticks(fontsize=10)
+            plt.tight_layout()
+
+            # 根据扰动方向保存到不同子文件夹
+            direction_dir = os.path.join(save_dir, f"{title_direction}扰动")
+            os.makedirs(direction_dir, exist_ok=True)
+            plt.savefig(os.path.join(direction_dir,
+                                     f'k{k_idx}_{direction}{abs((factor - 1) * 100):.0f}perturb.png'),
+                        dpi=300)
             plt.close()
 
-            # 记录最大变化
-            max_p = np.argmax(delta) + 1  # +1因为P从1开始
-            max_changes.append((k_idx, max_p, np.max(delta)))
+    # 分析结果输出
+    print("\n=== 扰动设置 ===")
+    for i, (d, f) in enumerate(perturb_settings, 1):
+        print(f"{i}. {d}{abs((f - 1) * 100):.0f}%扰动")
 
-    # 输出文字结果
-    print("关键系数分析：")
-    sorted_changes = sorted(max_changes, key=lambda x: x[2], reverse=True)[:10]
-    for k_idx, p_idx, change in sorted_changes:
-        print(f"k{k_idx}扰动导致 P{p_idx} 变化最大：{change:.1f}%")
+    print("\n=== 综合影响分析 ===")
+    print("影响最大的10个系数（按平均绝对影响排序）：")
+    print("排名 | 系数 | 平均影响(%) | 最大影响(P) | 变化幅度(%)")
+    print("-" * 60)
 
-    # 绘制热图
-    plt.figure(figsize=(12, 8))
-    plt.imshow(sensitivity_matrix, cmap='viridis', aspect='auto',
+    # 计算每个k的平均影响
+    k_effects = {}
+    for k_idx in range(40):
+        total_effect = 0
+        count = 0
+        max_effect = 0
+        max_p = 0
+
+        for record in all_changes:
+            if record[0] == k_idx:
+                current_max = np.max(np.abs(record[3]))
+                if current_max > max_effect:
+                    max_effect = current_max
+                    max_p = np.argmax(np.abs(record[3])) + 1
+                total_effect += np.mean(np.abs(record[3]))
+                count += 1
+
+        if count > 0:
+            k_effects[k_idx] = (total_effect / count, max_effect, max_p)
+
+    # 排序输出
+    sorted_effects = sorted(k_effects.items(), key=lambda x: x[1][0], reverse=True)[:10]
+    for rank, (k_idx, (avg, max_val, max_p)) in enumerate(sorted_effects, 1):
+        print(f"{rank:4} | k{k_idx:2} | {avg:9.1f} | P{max_p:2}      | {max_val:9.1f}")
+
+    # 热图绘制（使用inferno提高对比度）
+    plt.figure(figsize=(14, 8))
+    plt.imshow(sensitivity_matrix, cmap='inferno', aspect='auto',
                extent=[1, 40, 39, 0], vmin=0, vmax=np.max(sensitivity_matrix))
-    plt.colorbar(label='Concentration Change (%)')
-    plt.xlabel('Polymer Size (P)')
-    plt.ylabel('Rate Constant (k)')
-    plt.title('Sensitivity Heatmap of k0-k39 Perturbations')
-    plt.yticks(range(40), [f'k{i}' for i in range(40)])
+    plt.colorbar(label='浓度变化绝对值(%)', shrink=0.8)
+    plt.xlabel('聚合物尺寸 (P)', fontsize=12)
+    plt.ylabel('速率常数 (k)', fontsize=12)
+
+    # 在标题中显示使用的扰动设置
+    title_desc = "、".join([f"{d}{abs((f - 1) * 100):.0f}%" for d, f in perturb_settings])
+    plt.title(f'k0-k39扰动敏感性热图（{title_desc}）', fontsize=14, pad=20)
+
+    plt.yticks(range(40), [f'k{i}' for i in range(40)], fontsize=8)
+    plt.xticks(fontsize=10)
+    plt.tight_layout()
+    plt.savefig(os.path.join(save_dir, f'热图_{title_desc}.png'), dpi=300)
     plt.show()
 
 
-# 运行测试
+# 运行测试（保持您的原有main部分不变）
 if __name__ == '__main__':
-    # 初始条件和参数
     initial_p = np.zeros(41)
     initial_p[0] = 10
     t = np.linspace(0, 1000, 1000)
-
 
     k = {"k0": 0.1, "k1": 0.2796294846681433, "k2": 0.28295165086533625, "k3": 0.2831928752345816,
          "k4": 0.2842876182233199, "k5": 0.2844829653689831, "k6": 0.2846020267776552,
@@ -118,5 +210,4 @@ if __name__ == '__main__':
     initial_k = list(best_solution)
 
     base_sol = odeint(equations, initial_p, t, args=(initial_k,))
-    # 执行单系数扰动测试
     single_perturb_test(initial_k, base_sol)
