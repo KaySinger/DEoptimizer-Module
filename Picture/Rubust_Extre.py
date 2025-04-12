@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import odeint
 
-# 定义核心函数（基于原有代码）
+# 定义核心函数
 def equations(p, t, k_values):
     dpdt = np.zeros_like(p)
     k = k_values[:40]
@@ -13,6 +13,50 @@ def equations(p, t, k_values):
         dpdt[i] = k[i - 1] * (p[i - 1] ** 2) + k_inv[i - 1] * p[i + 1] - k_inv[i - 2] * p[i] - k[i] * (p[i] ** 2)
     dpdt[40] = k[39] * (p[39] ** 2) - k_inv[38] * p[40]
     return dpdt
+
+def plot_concentration_combined(t, sol):
+    # 创建一个包含 5 行 1 列的子图布局
+    fig, axs = plt.subplots(4, 1, figsize=(8, 12))  # figsize 为 (宽, 高)
+
+    # 绘制 P0-P10 的浓度变化
+    for i in range(11):
+        axs[0].plot(t, sol[:, i], label=f'P{i}')
+    axs[0].set_title('P0-P10 Concentration')
+    axs[0].set_xlabel('Time')
+    axs[0].set_ylabel('Concentration')
+    axs[0].legend()  # 调整图例位置
+    axs[0].grid(True)
+
+    # 绘制 P11-P20 的浓度变化
+    for i in range(11, 21):
+        axs[1].plot(t, sol[:, i], label=f'P{i}')
+    axs[1].set_title('P11-P20 Concentration')
+    axs[1].set_xlabel('Time')
+    axs[1].set_ylabel('Concentration')
+    axs[1].legend()
+    axs[1].grid(True)
+
+    # 绘制 P21-P30 的浓度变化
+    for i in range(21, 31):
+        axs[2].plot(t, sol[:, i], label=f'P{i}')
+    axs[2].set_title('P21-P30 Concentration')
+    axs[2].set_xlabel('Time')
+    axs[2].set_ylabel('Concentration')
+    axs[2].legend()
+    axs[2].grid(True)
+
+    # 绘制 P31-P40 的浓度变化
+    for i in range(31, 41):
+        axs[3].plot(t, sol[:, i], label=f'P{i}')
+    axs[3].set_title('P31-P40 Concentration')
+    axs[3].set_xlabel('Time')
+    axs[3].set_ylabel('Concentration')
+    axs[3].legend()
+    axs[3].grid(True)
+
+    # 自动调整布局，避免重叠
+    plt.tight_layout()
+    plt.show()
 
 def extreme_perturb_test(initial_k, base_sol):
     """对k1-k39进行±90%极端扰动测试"""
@@ -60,6 +104,12 @@ def extreme_perturb_test(initial_k, base_sol):
     plt.legend()
     plt.grid(True)
     plt.show()
+
+    # 重新计算最坏扰动情况并绘制时间演化
+    perturbed_k = initial_k.copy()
+    perturbed_k[worst_k] = initial_k[worst_k] * worst_ratio
+    worst_sol = odeint(equations, initial_p, t, args=(perturbed_k,))
+    plot_concentration_combined(t, worst_sol)
 
     # 文字报告
     print("\n极端扰动测试结果：")
