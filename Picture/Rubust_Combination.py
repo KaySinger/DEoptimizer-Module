@@ -1,10 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.integrate import odeint
-import seaborn as sns
-from tqdm import tqdm  # 进度条工具
+from tqdm import tqdm
+import pandas as pd
 
-# 定义核心函数（基于原有代码）
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 中文显示
+plt.rcParams['axes.unicode_minus'] = False
+
+
+# 核心动力学方程保持不变
 def equations(p, t, k_values):
     dpdt = np.zeros_like(p)
     k = k_values[:40]
@@ -16,65 +20,152 @@ def equations(p, t, k_values):
     dpdt[40] = k[39] * (p[39] ** 2) - k_inv[38] * p[40]
     return dpdt
 
-def random_perturb_test(initial_k, base_sol, n_runs=50, perturb_ratio=0.3):
-    """随机扰动20%的k并施加30%变化，重复50次"""
-    n_k = 40  # k0-k39共40个系数
-    n_perturb = int(n_k * 0.2)  # 每次扰动20%的k
-    results = []  # 存储所有扰动结果
 
-    # 主循环
+def random_perturb_analysis(initial_k, initial_p, t, n_runs=50, perturb_ratio=0.3):
+    """整合敏感性和关键性分析的随机扰动模式"""
+    # 参数设置
+    n_k = 40
+    n_perturb = int(n_k * 0.2)
+    results = []
+
+    # 扰动实验
     for _ in tqdm(range(n_runs)):
-        # 随机选择k并施加扰动
-        perturb_mask = np.random.choice(n_k, n_perturb, replace=False)
+        perturb_indices = np.random.choice(n_k, n_perturb, False)
         perturbed_k = initial_k.copy()
-        perturbed_k[perturb_mask] *= np.random.uniform(0.7, 1.3, n_perturb)  # ±30%随机扰动
+        for idx in perturb_indices:
+            perturbed_k[idx] *= np.random.uniform(1 - perturb_ratio, 1 + perturb_ratio)
 
-        # 求解ODE
         sol = odeint(equations, initial_p, t, args=(perturbed_k,))
-        results.append(sol[-1, 1:])  # 记录P1-P40的最终浓度
+        results.append(sol[-1, 1:])  # P1-P40
 
     results = np.array(results)
 
-    # 计算统计量
-    mean_conc = np.mean(results, axis=0)
+    # 综合评估
+    q1 = np.percentile(results, 25, axis=0)
+    q3 = np.percentile(results, 75, axis=0)
+    iqr = q3 - q1
+    outliers = np.sum((results < (q1 - 1.5 * iqr)) | (results > (q3 + 1.5 * iqr)), axis=0)
     std_conc = np.std(results, axis=0)
-    max_std_idx = np.argmax(std_conc) + 1  # +1对应P编号
 
-    # 文字输出
-    print("\n随机组合扰动结果：")
-    print(f"最敏感物质: P{max_std_idx} (标准差={std_conc[max_std_idx - 1]:.2f})")
-    print(f"全体系数平均标准差: {np.mean(std_conc):.2f}")
+    # 动态阈值分类
+    norm_iqr = (iqr - np.min(iqr)) / (np.max(iqr) - np.min(iqr) + 1e-8)
+    norm_outliers = (outliers - np.min(outliers)) / (np.max(outliers) - np.min(outliers) + 1e-8)
+
+    sensitivity_thresh = np.median(norm_iqr)
+    criticality_thresh = np.median(norm_outliers)
+
+    # 四分类系统
+    classifications = []
+    for i in range(40):
+        sens = norm_iqr[i] > sensitivity_thresh
+        crit = norm_outliers[i] > criticality_thresh
+
+        if sens and crit:
+            cls = "关键敏感物质"
+        elif sens:
+            cls = "非关键敏感物质"
+        elif crit:
+            cls = "关键非敏感物质"
+        else:
+            cls = "非关键非敏感物质"
+        classifications.append(cls)
+
+    # 构建结果表
+    stats_df = pd.DataFrame({
+        'Polymer': [f'P{i + 1}' for i in range(40)],
+        'IQR': iqr,
+        'Std': std_conc,
+        'Outliers': outliers,
+        'Classification': classifications
+    }).sort_values('Polymer', key=lambda x: x.str[1:].astype(int))
 
     # 可视化
-    plt.figure(figsize=(12, 6))
+    plot_combined_analysis(results, classifications, stats_df)
 
-    # 箱线图
-    plt.subplot(121)
-    plt.boxplot(results[:, ::5], labels=[f'P{i}' for i in range(1, 41, 5)])
-    plt.xticks(rotation=45)
-    plt.title('Concentration Distribution (Sampled P)')
-    plt.ylabel('Concentration')
+    # 结果输出
+    print(f"\n随机扰动分析结果（{n_runs}次实验，每次扰动{n_perturb}个参数）:")
+    print_stats_by_category(stats_df)
+    print(f"\n全体系数平均标准差: {np.mean(std_conc):.5f}")
 
-    # 标准差条形图
-    plt.subplot(122)
-    plt.bar(range(1, 41), std_conc, alpha=0.7)
-    plt.axhline(np.mean(std_conc), color='r', linestyle='--', label='Mean Std')
-    plt.xlabel('Polymer Size')
-    plt.ylabel('Standard Deviation')
-    plt.title('Concentration Stability Across P1-P40')
+    return stats_df
+
+
+def plot_combined_analysis(results, classifications, stats_df):
+    """综合可视化（箱线图+IQR条形图）"""
+    # ===== 箱线图 =====
+    plt.figure(figsize=(12, 7))
+    color_map = {
+        "关键敏感物质": "#E74C3C",
+        "非关键敏感物质": "#F1C40F",
+        "关键非敏感物质": "#3498DB",
+        "非关键非敏感物质": "#95A5A6"
+    }
+
+    box = plt.boxplot(
+        results,
+        tick_labels=[f'P{i + 1}' for i in range(40)],
+        patch_artist=True,
+        widths=0.6
+    )
+
+    # 设置颜色
+    for patch, cls in zip(box['boxes'], classifications):
+        patch.set_facecolor(color_map[cls])
+
+    # 图例
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor=c, label=l) for l, c in color_map.items()]
+    plt.legend(handles=legend_elements, loc='upper right')
+    plt.title("浓度分布与关键性分析", fontsize=14)
+    plt.xticks(rotation=90, fontsize=8)
+    plt.grid(axis='y', linestyle='--', alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # ===== 敏感性条形图 =====
+    plt.figure(figsize=(12, 7))
+    colors = [color_map[cls] for cls in classifications]
+    bars = plt.bar(range(40), stats_df['IQR'], color=colors)
+
+    plt.title("敏感性分析（IQR指标）", fontsize=14)
+    plt.xticks(range(40), stats_df['Polymer'], rotation=90, fontsize=8)
+    plt.axhline(np.median(stats_df['IQR']), color='k', linestyle='--', label='中位IQR')
+    plt.ylabel("IQR值")
     plt.legend()
+    plt.grid(axis='y', linestyle='--', alpha=0.3)
 
     plt.tight_layout()
     plt.show()
 
 
-# 运行测试（需先定义initial_k, initial_p等变量）
+def print_stats_by_category(stats_df):
+    """按分类输出统计结果"""
+    categories = {
+        "关键敏感物质": [],
+        "非关键敏感物质": [],
+        "关键非敏感物质": [],
+        "非关键非敏感物质": []
+    }
+
+    for _, row in stats_df.iterrows():
+        categories[row['Classification']].append(row)
+
+    for cls in categories:
+        if not categories[cls]: continue
+        print(f"\n{cls}:")
+        for item in categories[cls]:
+            print(f"  {item['Polymer']}: 标准差={item['Std']:.5f} 异常值={item['Outliers']}")
+        avg_std = np.mean([x['Std'] for x in categories[cls]])
+        print(f"  类别平均标准差: {avg_std:.5f}")
+
+# ================== 主程序 ==================
 if __name__ == '__main__':
-    # 初始条件和参数
+    # 初始化参数
     initial_p = np.zeros(41)
     initial_p[0] = 10
     t = np.linspace(0, 1000, 1000)
 
+    # 加载参数
     k = {"k0": 0.1, "k1": 0.2796294846681433, "k2": 0.28295165086533625, "k3": 0.2831928752345816,
          "k4": 0.2842876182233199, "k5": 0.2844829653689831, "k6": 0.2846020267776552,
          "k7": 0.2853746900185002, "k8": 0.28546120653482965, "k9": 0.29044005981184273, "k10": 0.2905951285383373,
@@ -104,10 +195,10 @@ if __name__ == '__main__':
              "k34_inv": 0.10733099769955946, "k35_inv": 0.10394764710764955,
              "k36_inv": 0.09034301580205746, "k37_inv": 0.09995339116167218, "k38_inv": 0.08520343173840925,
              "k39_inv": 0.0719522340192938}
-    best_solution = list(k.values()) + list(k_inv.values())
+    initial_k = list(k.values()) + list(k_inv.values())
 
-    initial_k = list(best_solution)
+    # 运行整合分析
+    stats_df = random_perturb_analysis(initial_k, initial_p, t)
 
-    base_sol = odeint(equations, initial_p, t, args=(initial_k,))
-
-    random_perturb_test(initial_k, base_sol)
+    # 保存结果
+    stats_df.to_csv("combined_analysis.csv", index=False)
