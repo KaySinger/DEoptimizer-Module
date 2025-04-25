@@ -20,6 +20,7 @@ class SHADE:
         self.max_gen = max_gen
         self.H = H
         self.tol = tol
+        self.archive_size = pop_size
 
         # 初始化历史记忆
         self.F_memory = [0.5] * H
@@ -48,6 +49,53 @@ class SHADE:
                 repaired[j] = (parent[j] + high) / 2
         return repaired
 
+    def resize_archive(self):
+        if len(self.archive) > self.archive_size:
+            np.random.shuffle(self.archive)
+            self.archive = self.archive[:self.archive_size]
+
+    def mutant(self, F, i):
+        # current-to-pbest/1变异策略
+        p_min = max(2 / self.pop_size, 0.05)  # 双重保护
+        p_i = np.random.uniform(p_min, 0.2)
+        p_best_size = max(2, int(self.pop_size * p_i))
+
+        # 选择p_best
+        p_best_indices = np.argsort(self.fitness)[:p_best_size]
+        p_best_idx = np.random.choice(p_best_indices)
+        p_best = self.pop[p_best_idx]
+
+        # 选择a（来自种群）
+        a_candidates = [idx for idx in range(self.pop_size)
+                        if idx != i and not np.array_equal(self.pop[idx], p_best)]
+
+        if len(a_candidates) == 0:
+            a = self.pop[np.random.choice([x for x in range(self.pop_size) if x != i])]
+        else:
+            a = self.pop[np.random.choice(a_candidates)]
+
+        # 合并种群和存档
+        combined_pop = np.vstack([self.pop, np.array(self.archive)]) if self.archive else self.pop
+
+        # 选择b（来自合并种群）
+        b_candidates = []
+        for idx in range(len(combined_pop)):
+            if not np.array_equal(combined_pop[idx], self.pop[i]) and \
+                    not np.array_equal(combined_pop[idx], p_best) and \
+                    not np.array_equal(combined_pop[idx], a):
+                b_candidates.append(idx)
+
+        if len(b_candidates) == 0:
+            b = combined_pop[np.random.choice(len(combined_pop))]
+        else:
+            b = combined_pop[np.random.choice(b_candidates)]
+
+        # 变异操作
+        mutant = self.pop[i] + F * (p_best - self.pop[i]) + F * (a - b)
+        mutant = self._repair(mutant, self.pop[i], self.bounds)
+
+        return mutant
+
     @staticmethod
     def _crossover(parent, mutant, CR):
         """带强制交叉的二项交叉"""
@@ -65,8 +113,11 @@ class SHADE:
             # 记录当前最优值
             best_val = np.min(self.fitness)
             self.iteration_log.append(best_val)
-            if best_val <= self.tol:
-                print(f"Converged at generation {gen} with precision {best_val:.6e}")
+            if self.tol is not None and best_val <= self.tol:
+                print(f"Converged at generation {gen} with precision {best_val}")
+                break
+            elif gen >= self.max_gen - 1:
+                print(f"Converged at generation {gen} with precision {best_val}")
                 break
 
             for i in range(self.pop_size):
@@ -78,39 +129,7 @@ class SHADE:
                 CR = np.clip(np.random.normal(self.CR_memory[r], 0.1), 0, 1)
 
                 # current-to-pbest/1变异策略
-                p_min = max(2 / self.pop_size, 0.05)  # 双重保护
-                p_i = np.random.uniform(p_min, 0.2)
-                p_best_size = max(2, int(self.pop_size * p_i))
-
-                # 选择p_best
-                p_best_indices = np.argsort(self.fitness)[:p_best_size]
-                p_best_idx = np.random.choice(p_best_indices)
-                p_best = self.pop[p_best_idx]
-
-                # 合并种群和存档
-                combined_pop = np.vstack([self.pop, np.array(self.archive)]) if self.archive else self.pop.copy()
-
-                # 选择a和b（排除当前个体和p_best）
-                candidates = []
-                for idx in range(len(combined_pop)):
-                    if not (np.array_equal(combined_pop[idx], self.pop[i]) or
-                            np.array_equal(combined_pop[idx], p_best)):
-                        candidates.append(idx)
-
-                # 处理候选不足的情况
-                if len(candidates) >= 2:
-                    selected = np.random.choice(candidates, 2, replace=False)
-                    a, b = combined_pop[selected[0]], combined_pop[selected[1]]
-                else:
-                    selected = np.random.choice(self.pop_size, 2, replace=False)
-                    a, b = self.pop[selected[0]], self.pop[selected[1]]
-
-                # 变异操作
-                mutant = self._repair(
-                    self.pop[i] + F * (p_best - self.pop[i]) + F * (a - b),
-                    self.pop[i],
-                    self.bounds
-                )
+                mutant = self.mutant(F, i)
 
                 # 交叉操作
                 trial = self._crossover(self.pop[i], mutant, CR)
@@ -126,14 +145,12 @@ class SHADE:
                     # 更新适应度和存档
                     self.fitness[i] = trial_fitness
                     self.archive.append(self.pop[i].copy())
-                    # 控制存档大小
-                    if len(self.archive) > self.pop_size:
-                        self.archive.pop(np.random.randint(0, len(self.archive)))
                 else:
                     new_pop.append(self.pop[i])
 
             # 更新种群
             self.pop = np.array(new_pop)
+            self.resize_archive()
 
             # 更新历史记忆
             if S_F:
