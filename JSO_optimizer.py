@@ -19,12 +19,10 @@ class JSO:
         self.max_gen = max_gen
         self.H = H
         self.tol = tol
-        self.arc_rate = 2.6  # 存档大小系数
 
         # 自动计算初始种群大小
         self.N_init = int(round(np.sqrt(self.dim) * np.log(self.dim) * 25)) if pop_size is None else pop_size
         self.N_min = 4  # 最小种群大小
-        self.pop_size = self.N_init  # 当前种群大小
 
         # 初始化历史记忆
         self.F_memory = [0.5] * H
@@ -32,24 +30,16 @@ class JSO:
         self.hist_idx = 0
 
         # 初始化种群和存档
-        self.pop = self._quasi_opposition_init()
+        self.N_current = self.N_init  # 当前种群大小
+        self.pop = np.random.uniform(
+            low=self.bounds[:, 0],
+            high=self.bounds[:, 1],
+            size=(self.N_init, self.dim)
+        )
         self.fitness = np.apply_along_axis(self.func, 1, self.pop)
         self.archive = []
         self.iteration_log = []
 
-    def _quasi_opposition_init(self):
-        """准对立初始化"""
-        pop = []
-        for _ in range(self.pop_size):
-            # 生成准对立解
-            x = np.random.uniform(self.bounds[:, 0], self.bounds[:, 1])
-            x_opposite = self.bounds[:, 0] + self.bounds[:, 1] - x
-            # 选择更优的解
-            if self.func(x) < self.func(x_opposite):
-                pop.append(x)
-            else:
-                pop.append(x_opposite)
-        return np.array(pop)
 
     @staticmethod
     def _repair(mutant, parent, bounds):
@@ -62,6 +52,61 @@ class JSO:
             elif repaired[j] > high:
                 repaired[j] = (parent[j] + high) / 2
         return repaired
+
+    def resize_archive(self):
+        if len(self.archive) > self.N_current:
+            np.random.shuffle(self.archive)
+            self.archive = self.archive[:self.N_current]
+
+    def mutant(self, F, i, gen):
+        # current-to-pbest/1变异策略
+        p_min, p_max = 0.125, 0.25
+        p_i = p_min + (gen / self.max_gen) * (p_max - p_min)
+        p_best_size = max(2, int(self.N_current * p_i))
+
+        # 选择p_best个体
+        p_best_indices = np.argsort(self.fitness)[:p_best_size]
+        p_best_idx = np.random.choice(p_best_indices)
+        p_best = self.pop[p_best_idx]
+
+        # 选择a（来自种群）
+        a_candidates = [idx for idx in range(self.N_current)
+                        if idx != i and not np.array_equal(self.pop[idx], p_best)]
+
+        if len(a_candidates) == 0:
+            a = self.pop[np.random.choice([x for x in range(self.N_current) if x != i])]
+        else:
+            a = self.pop[np.random.choice(a_candidates)]
+
+        # 合并种群和存档
+        combined_pop = np.vstack([self.pop, np.array(self.archive)]) if self.archive else self.pop
+
+        # 选择b（来自合并种群）
+        b_candidates = []
+        for idx in range(len(combined_pop)):
+            if not np.array_equal(combined_pop[idx], self.pop[i]) and \
+                    not np.array_equal(combined_pop[idx], p_best) and \
+                    not np.array_equal(combined_pop[idx], a):
+                b_candidates.append(idx)
+
+        if len(b_candidates) == 0:
+            b = combined_pop[np.random.choice(len(combined_pop))]
+        else:
+            b = combined_pop[np.random.choice(b_candidates)]
+
+        # 变异操作
+        # 时变F
+        if gen < 0.2 * self.max_gen:
+            jF = F * 0.7
+        elif gen < 0.4 * self.max_gen:
+            jF = F * 0.8
+        else:
+            jF = F * 1.2
+
+        mutant = self.pop[i] + jF * (p_best - self.pop[i]) + F * (a - b)
+        mutant = self._repair(mutant, self.pop[i], self.bounds)
+
+        return mutant
 
     @staticmethod
     def _crossover(parent, mutant, CR):
@@ -82,18 +127,21 @@ class JSO:
 
     def optimize(self):
         """执行优化过程"""
-        for gen in range(1, self.max_gen + 1):
+        for gen in range(self.max_gen):
             S_F, S_CR, S_weights = [], [], []
             new_pop = []
 
             # 记录当前最优值
             best_val = np.min(self.fitness)
             self.iteration_log.append(best_val)
-            if best_val <= self.tol:
-                print(f"Converged at generation {gen} with precision {best_val:.6e}")
+            if self.tol is not None and best_val <= self.tol:
+                print(f"Converged at generation {gen} with precision {best_val}")
+                break
+            elif gen >= self.max_gen - 1:
+                print(f"Converged at generation {gen} with precision {best_val}")
                 break
 
-            for i in range(self.pop_size):
+            for i in range(self.N_current):
                 # ========================= 参数生成 =========================
                 # 从历史记忆随机选择索引
                 r = np.random.randint(0, self.H)
@@ -118,49 +166,8 @@ class JSO:
                 if gen < 0.6 * self.max_gen and F > 0.7:
                     F = 0.7
 
-                # ========================= 变异策略 =========================
-                # 动态计算p值（论文公式）
-                p_min, p_max = 0.05, 0.15
-                p_i = p_min + (gen / self.max_gen) * (p_max - p_min)
-                p_best_size = max(2, int(self.pop_size * p_i))
-
-                # 选择p_best个体
-                p_best_indices = np.argsort(self.fitness)[:p_best_size]
-                p_best_idx = np.random.choice(p_best_indices)
-                p_best = self.pop[p_best_idx]
-
-                # 合并种群和存档
-                combined_pop = np.vstack([self.pop, np.array(self.archive)]) if self.archive else self.pop.copy()
-
-                # 选择a和b（排除当前个体和p_best）
-                candidates = []
-                for idx in range(len(combined_pop)):
-                    if not (np.array_equal(combined_pop[idx], self.pop[i]) or
-                            np.array_equal(combined_pop[idx], p_best)):
-                        candidates.append(idx)
-
-                # 处理候选不足的情况
-                if len(candidates) >= 2:
-                    selected = np.random.choice(candidates, 2, replace=False)
-                    a, b = combined_pop[selected[0]], combined_pop[selected[1]]
-                else:
-                    selected = np.random.choice(self.pop_size, 2, replace=False)
-                    a, b = self.pop[selected[0]], self.pop[selected[1]]
-
-                # 时变F调整（论文第III.C节）
-                if gen < 0.2 * self.max_gen:
-                    jF = F * 0.7
-                elif gen < 0.4 * self.max_gen:
-                    jF = F * 0.8
-                else:
-                    jF = F * 1.2
-
                 # 变异操作
-                mutant = self._repair(
-                    self.pop[i] + jF * (p_best - self.pop[i]) + F * (a - b),
-                    self.pop[i],
-                    self.bounds
-                )
+                mutant = self.mutant(F, i, gen)
 
                 # ========================= 交叉操作 =========================
                 trial = self._crossover(self.pop[i], mutant, CR)
@@ -176,14 +183,12 @@ class JSO:
                     # 更新适应度和存档
                     self.fitness[i] = trial_fitness
                     self.archive.append(self.pop[i].copy())
-                    # 控制存档大小（论文要求2.6倍）
-                    if len(self.archive) > self.arc_rate * self.pop_size:
-                        self.archive.pop(np.random.randint(0, len(self.archive)))
                 else:
                     new_pop.append(self.pop[i])
 
             # ======================== 种群和记忆更新 ========================
             self.pop = np.array(new_pop)
+            self.resize_archive()
 
             # 更新历史记忆（加权Lehmer均值）
             if S_F:
@@ -196,22 +201,18 @@ class JSO:
                 self.hist_idx = (self.hist_idx + 1) % self.H
 
             # 更新种群大小
-                # 计算计划种群大小（论文线性公式）
-                plan_pop_size = int(round(
-                    self.N_init - (self.N_init - self.N_min) * (gen / self.max_gen)
-                ))
-                plan_pop_size = max(plan_pop_size, self.N_min)
+            plan_pop_size = self._linear_pop_size_reduction(gen)
 
-                # 如果当前种群大于计划值，缩减种群
-                if self.pop_size > plan_pop_size:
-                    # 按适应度排序，保留最优个体
-                    sorted_indices = np.argsort(self.fitness)
-                    self.pop = self.pop[sorted_indices[:plan_pop_size]]
-                    self.fitness = self.fitness[sorted_indices[:plan_pop_size]]
-                    self.pop_size = plan_pop_size
+            # 如果当前种群大于计划值，缩减种群
+            if self.N_current > plan_pop_size:
+                # 按适应度排序，保留最优个体
+                sorted_indices = np.argsort(self.fitness)
+                self.pop = self.pop[sorted_indices[:plan_pop_size]]
+                self.fitness = self.fitness[sorted_indices[:plan_pop_size]]
+                self.N_current = plan_pop_size
 
             # 输出迭代信息
-            print(f"Iteration {gen + 1}, Best Fitness: {np.min(self.fitness)}, pop_size: {self.pop_size}")
+            print(f"Iteration {gen + 1}, Best Fitness: {np.min(self.fitness)}, pop_size: {self.N_current}")
 
         # 返回最优解
         best_idx = np.argmin(self.fitness)
