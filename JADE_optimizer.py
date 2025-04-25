@@ -21,6 +21,7 @@ class JADE:
         self.max_gen = max_gen
         self.p = p
         self.tol = tol
+        self.archive_size = pop_size
 
         # 初始化参数
         self.F_mean = 0.5
@@ -44,6 +45,49 @@ class JADE:
                 mutant[j] = (parent[j] + (low if mutant[j] < low else high)) / 2
         return mutant
 
+    def resize_archive(self):
+        if len(self.archive) > self.archive_size:
+            np.random.shuffle(self.archive)
+            self.archive = self.archive[:self.archive_size]
+
+    def mutant(self, F, i):
+        # 选择p_best
+        p_best_size = max(int(self.pop_size * self.p), 2)  # 至少1个
+        p_best_indices = np.argsort(self.fitness)[:p_best_size]
+        p_best_idx = np.random.choice(p_best_indices)
+        p_best = self.pop[p_best_idx]
+
+        # 选择a（来自种群）
+        a_candidates = [idx for idx in range(self.pop_size)
+                        if idx != i and not np.array_equal(self.pop[idx], p_best)]
+
+        if len(a_candidates) == 0:
+            a = self.pop[np.random.choice([x for x in range(self.pop_size) if x != i])]
+        else:
+            a = self.pop[np.random.choice(a_candidates)]
+
+        # 合并种群和存档
+        combined_pop = np.vstack([self.pop, np.array(self.archive)]) if self.archive else self.pop
+
+        # 选择b（来自合并种群）
+        b_candidates = []
+        for idx in range(len(combined_pop)):
+            if not np.array_equal(combined_pop[idx], self.pop[i]) and \
+                    not np.array_equal(combined_pop[idx], p_best) and \
+                    not np.array_equal(combined_pop[idx], a):
+                b_candidates.append(idx)
+
+        if len(b_candidates) == 0:
+            b = combined_pop[np.random.choice(len(combined_pop))]
+        else:
+            b = combined_pop[np.random.choice(b_candidates)]
+
+        # 变异操作
+        mutant = self.pop[i] + F * (p_best - self.pop[i]) + F * (a - b)
+        mutant = self._repair(mutant, self.pop[i], self.bounds)
+
+        return mutant
+
     def optimize(self):
         """执行优化过程"""
         for gen in range(self.max_gen):
@@ -62,36 +106,9 @@ class JADE:
                 F = np.clip(np.random.standard_cauchy() * 0.1 + self.F_mean, 0, 1)
                 CR = np.clip(np.random.normal(self.CR_mean, 0.1), 0, 1)
 
-                # 选择p_best
-                p_best_size = max(int(self.pop_size * self.p), 1)  # 至少1个
-                p_best_indices = np.argsort(self.fitness)[:p_best_size]
-                p_best_idx = np.random.choice(p_best_indices)
-                p_best = self.pop[p_best_idx]
+                mutant = self.mutant(F, i)
 
-                # 合并种群和存档
-                combined_pop = np.vstack([self.pop, np.array(self.archive)]) if self.archive else self.pop.copy()
-
-                # 选择a和b（排除当前个体和p_best）
-                candidates = []
-                for idx in range(len(combined_pop)):
-                    # 避免选择当前个体或p_best
-                    if not (np.array_equal(combined_pop[idx], self.pop[i]) or np.array_equal(combined_pop[idx], p_best)):
-                        candidates.append(idx)
-
-                # 确保能够选择两个不同的个体
-                if len(candidates) >= 2:
-                    selected = np.random.choice(candidates, 2, replace=False)
-                    a, b = combined_pop[selected[0]], combined_pop[selected[1]]
-                else:
-                    # 回退到当前种群随机选择
-                    selected = np.random.choice(self.pop_size, 2, replace=False)
-                    a, b = self.pop[selected[0]], self.pop[selected[1]]
-
-                # 变异操作
-                mutant = self.pop[i] + F * (p_best - self.pop[i]) + F * (a - b)
-                mutant = self._repair(mutant, self.pop[i], self.bounds)
-
-                # 交叉操作（确保至少一个维度来自mutant）
+                # 交叉操作
                 cross_mask = np.random.rand(self.dim) < CR
                 if not np.any(cross_mask):  # 如果全部未交叉
                     cross_mask[np.random.randint(self.dim)] = True  # 强制选择一个维度
@@ -106,14 +123,12 @@ class JADE:
                     self.archive.append(self.pop[i].copy())
                     F_values.append(F)
                     CR_values.append(CR)
-                    # 控制存档大小
-                    if len(self.archive) > self.pop_size:
-                        self.archive.pop(np.random.randint(0, len(self.archive)))
                 else:
                     new_pop.append(self.pop[i])
 
             # 更新种群
             self.pop = np.array(new_pop)
+            self.resize_archive()
 
             # 更新自适应参数
             if F_values:
