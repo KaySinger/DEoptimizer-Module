@@ -3,7 +3,7 @@ import numpy as np
 class LSHADE_RSP:
     def __init__(self, func, bounds, pop_size=None, max_gen=None, H=None, tol=1e-6):
         """
-        jSO优化算法类
+        LSHADE_RSP优化算法类
 
         参数：
         func: 目标函数（最小化）
