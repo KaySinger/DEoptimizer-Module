@@ -3,7 +3,7 @@ import numpy as np
 class LSHADE_RSP:
     def __init__(self, func, bounds, pop_size=None, max_gen=None, H=None, tol=1e-6):
         """
-        LSHADE_RSP优化算法类
+        jSO优化算法类
 
         参数：
         func: 目标函数（最小化）
@@ -77,7 +77,9 @@ class LSHADE_RSP:
         )
 
     def rank_based_mutation(self, i, F, gen):
-        p = max(0.085, 0.085 + gen / self.max_gen)
+        pb_max = 0.4
+        pb_min = 0.2
+        p = pb_min + (pb_max - pb_min) * (gen / self.max_gen)
         sorted_idx = np.argsort(self.fitness)
         p_best_size = max(2, int(self.pop_size * p))
 
@@ -96,18 +98,13 @@ class LSHADE_RSP:
         prs = ranks / np.sum(ranks)
 
         # 从种群或存档中选择 r1 和 r2（基于RSP策略）
-        def select_r(exclude_idx):
-            candidates = np.delete(np.arange(self.pop_size), exclude_idx)
-            candidate_prs = np.delete(prs, exclude_idx)
-            # 归一化概率（排除当前个体）
-            candidate_prs /= candidate_prs.sum()
-            return np.random.choice(candidates, p=candidate_prs)
+        r1_idx = np.random.choice(self.pop, p=prs)
 
-        # 选择 r1 和 r2（必须不同且不等于当前个体）
-        r1_idx = select_r(i)
-        r2_idx = select_r(i)
-        while r1_idx == r2_idx:
-            r2_idx = select_r(i)
+        r = np.random.rand()
+        if r < len(self.archive) / (len(self.archive) + self.pop):
+            r2_idx = np.random.randint(0, len(self.archive))
+        else:
+            r2_idx = np.random.choice(self.pop, p=prs)
         r1 = self.pop[r1_idx]
         r2 = self.pop[r2_idx]
 
