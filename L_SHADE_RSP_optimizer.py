@@ -76,7 +76,7 @@ class LSHADE_RSP:
             ))
         )
 
-    def rank_based_mutation(self, i, F, gen):
+        def rank_based_mutation(self, i, F, gen):
         pb_max = 0.4
         pb_min = 0.2
         p = pb_min + (pb_max - pb_min) * (gen / self.max_gen)
@@ -94,20 +94,28 @@ class LSHADE_RSP:
         ranks = np.zeros(self.pop_size)
         for rank_order, idx in enumerate(sorted_idx):
             ranks[idx] = 3 * (self.pop_size - (rank_order + 1)) + 1
-            # 计算概率
+        # 计算概率
         prs = ranks / np.sum(ranks)
 
         # 从种群或存档中选择 r1 和 r2（基于RSP策略）
-        r1_idx = np.random.choice(self.pop, p=prs)
-
-        r = np.random.rand()
-        if r < len(self.archive) / (len(self.archive) + self.pop):
-            r2_idx = np.random.randint(0, len(self.archive))
-        else:
-            r2_idx = np.random.choice(self.pop, p=prs)
+        # 选择r1
+        r1_idx = np.random.choice(self.pop_size, p=prs)
         r1 = self.pop[r1_idx]
-        r2 = self.pop[r2_idx]
 
+        # 选择r2
+        r = np.random.rand()
+        archive_size = len(self.archive)
+        total_size = archive_size + self.pop_size
+        # 如果存档非空且满足概率条件，则从存档中选择
+        if archive_size > 0 and r < (archive_size / total_size):
+            r2_idx = np.random.randint(0, archive_size)
+            r2 = self.archive[r2_idx]
+        else:
+            # 否则从种群中选择
+            r2_idx = np.random.choice(self.pop_size, p=prs)
+            r2 = self.pop[r2_idx]
+
+        # 根据当前代数调整F的权重
         if gen < 0.2 * self.max_gen:
             Fw = 0.7 * F
         elif gen < 0.4 * self.max_gen:
@@ -115,6 +123,7 @@ class LSHADE_RSP:
         else:
             Fw = 1.2 * F
 
+        # 生成变异向量
         v = self.pop[i] + Fw * (p_best - self.pop[i]) + F * (r1 - r2)
         return self._repair(v, self.pop[i], self.bounds)
 
